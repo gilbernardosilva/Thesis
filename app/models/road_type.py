@@ -3,7 +3,7 @@ from sqlalchemy import Column, Integer, String
 from app.models.base import Base
 
 
-class RoadTypeParameters(Base):
+class RoadTypeModel(Base):
     __tablename__ = "road_type_parameters"
 
     road_type = Column(String(50), primary_key=True)

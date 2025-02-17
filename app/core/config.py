@@ -8,14 +8,19 @@ load_dotenv()
 
 
 class Settings(BaseSettings):
-    api_v1_str: Optional[str] = os.getenv("API_V1_STR")
-    postgres_user: Optional[str] = os.getenv("POSTGRES_USER")
-    postgres_password: Optional[str] = os.getenv("POSTGRES_PASSWORD")
-    postgres_db: Optional[str] = os.getenv("POSTGRES_DB")
-    postgres_host: Optional[str] = os.getenv("POSTGRES_HOST")
-    postgres_port: Optional[int] = os.getenv("POSTGRES_PORT")
+    postgres_user: str
+    postgres_password: str
+    postgres_db: str
+    postgres_host: str
+    postgres_port: int
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    api_prod_url: str
+    api_prod_access_token: str
+    api_stg_url: str
+    api_stg_access_token: str
+
+    class Config:
+        env_file = ".env"
 
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:

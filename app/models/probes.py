@@ -9,13 +9,13 @@ class ProbeModel(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     identifier = Column(String(255), nullable=False)
     routing_mode = Column(String(50), nullable=False)
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
+    lat = Column(Float, nullable=False)
+    lng = Column(Float, nullable=False)
     altitude = Column(Float)
     course_over_ground = Column(Float)
     speed = Column(Float)
     hdop = Column(Float)
-    timestamp = Column(String(50), nullable=False)
+    timestamp = Column(Integer, nullable=False)
     rt = Column(String(50))
 
     def __repr__(self):

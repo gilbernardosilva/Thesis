@@ -1,7 +1,6 @@
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
-from app.core.db.session import get_db
 from app.models.probes import ProbeModel
 
 
@@ -23,7 +22,7 @@ def import_probes_from_file(db: Session, file_path: str) -> None:
     try:
         with open(file_path, "r") as f:
             copy_sql = """
-            COPY probes(identifier, routing_mode, latitude, longitude, altitude, 
+            COPY probes(identifier, routing_mode, lat, lng, altitude, 
                         course_over_ground, speed, hdop, timestamp, rt)
             FROM STDIN WITH (FORMAT csv, DELIMITER ';', HEADER false);
             """
@@ -40,3 +39,14 @@ def import_probes_from_file(db: Session, file_path: str) -> None:
 def print_probes(db: Session) -> None:
     for probe in db.query(ProbeModel).limit(40).all():
         print(probe)
+
+
+def get_probe_by_identifier_and_timestamp(
+    db: Session, identifier: str, timestamp: str
+) -> ProbeModel:
+    probe = (
+        db.query(ProbeModel)
+        .filter(ProbeModel.identifier == identifier, ProbeModel.timestamp == timestamp)
+        .first()
+    )
+    return probe
