@@ -1,61 +1,23 @@
-import random
-from datetime import timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List
 
 import folium
 import geopandas as gpd
 import movingpandas as mpd
 import pandas as pd
-from folium import plugins
 from shapely.geometry import LineString
-from sqlalchemy.orm import Session
 
-from app.db.session import SessionLocal
-from app.models.probes import ProbeModel
+from app.db.db_utils import load_matched_probe_data, load_raw_probe_data
 from app.schemas.location import LocationSTG
-from app.services.api import fetch_off_route_info
-
-
-def load_raw_probe_data_batch(session: Session) -> List[Tuple[float, float, int, str]]:
-
-    subquery = session.query(ProbeModel.identifier).distinct().limit(5).subquery()
-
-    results = (
-        session.query(
-            ProbeModel.lat, ProbeModel.lng, ProbeModel.timestamp, ProbeModel.identifier
-        )
-        .filter(ProbeModel.identifier.in_(subquery))
-        .order_by(ProbeModel.identifier, ProbeModel.timestamp)
-        .all()
-    )
-
-    return results
-
-
-def load_raw_probe_data(session: Session, identifier: str) -> List[Tuple]:
-    """Carrega dados de probes para um identificador específico."""
-
-    results = (
-        session.query(
-            ProbeModel.lat, ProbeModel.lng, ProbeModel.timestamp, ProbeModel.identifier
-        )
-        .filter_by(identifier=identifier)
-        .order_by(ProbeModel.timestamp)
-        .all()
-    )
-
-    return results
-
-
-def load_matched_probe_data(session: Session, identifier: str) -> List[LocationSTG]:
-    probes = (
-        session.query(ProbeModel)
-        .filter_by(identifier=identifier)
-        .order_by(ProbeModel.timestamp)
-        .all()
-    )
-    location_data = [LocationSTG(**probe.__dict__) for probe in probes]
-    return location_data
+from app.services.moving_pandas.calcutations import (
+    calculate_avg_speed,
+    calculate_avg_speed_by_address,
+    calculate_duration,
+    calculate_probes_per_second,
+)
+from app.services.moving_pandas.parsing import (
+    parse_csv_for_vehicle,
+    process_matched_trajectory,
+)
 
 
 def create_raw_df(raw_results: List[dict]) -> pd.DataFrame:
@@ -85,84 +47,6 @@ def create_geodataframe(df: pd.DataFrame) -> gpd.GeoDataFrame:
     )
     print("GeoDataFrame created with geometry column.")
     return gdf
-
-
-def calculate_avg_speed(traj: mpd.Trajectory) -> float:
-    """
-    Para dados RAW: calcula a velocidade média (em km/h) usando MovingPandas.
-    """
-    traj.add_speed(overwrite=True)
-    avg_speed = traj.df.speed.mean() * 3.6
-    return avg_speed
-
-
-def calculate_duration(start_time, end_time) -> timedelta:
-    duration = end_time - start_time
-    return duration
-
-
-def calculate_probes_per_second(df: pd.DataFrame) -> float:
-    total_probes = len(df)
-    time_duration = (df.index[-1] - df.index[0]).total_seconds()
-    return total_probes / time_duration if time_duration > 0 else 0
-
-
-def group_locations(
-    locations: List[LocationSTG], batch_size: int = 5, overlap_size: int = 1
-) -> List[List[LocationSTG]]:
-    batches = []
-
-    for i in range(0, len(locations), batch_size - overlap_size):
-        batch = locations[i : i + batch_size]
-
-        if batch:
-            batches.append(batch)
-
-    return batches
-
-
-# def group_locations(
-#     locations: List[LocationSTG], batch_size: int = 5
-# ) -> List[List[LocationSTG]]:
-#     batches = []
-
-#     for i in range(0, len(locations), batch_size):
-#         batch = locations[i : i + batch_size]
-
-#         if batch:
-#             batches.append(batch)
-
-#     return batches
-
-
-def process_matched_trajectory(
-    identifier: str,
-    locations: List[LocationSTG],
-    batch_size: int = 5,
-) -> List[dict]:
-    batches = group_locations(locations, batch_size)
-    matched_results = []
-    for group in batches:
-        result = fetch_off_route_info(group)
-        if result and result.get("status") == "OK":
-            snapped_road = result.get("snapped_road", {})
-            street_address = snapped_road.get("street_address")
-            snap_point = snapped_road.get("snap_point", {})
-            travel_speed = result.get("speed_limit", {}).get("travel_speed", None)
-            matched_results.append(
-                {
-                    "lat": snap_point.get("lat"),
-                    "lng": snap_point.get("lng"),
-                    "travel_speed": travel_speed,
-                    "timestamp": group[0].timestamp,
-                    "num_points": len(group),
-                    "identifier": identifier,
-                    "address": street_address,
-                }
-            )
-        else:
-            print("API returned an error for group:", group)
-    return matched_results
 
 
 def create_trajectory_map_raw(
@@ -270,6 +154,97 @@ def create_trajectory_map_matched(
     return m
 
 
+def create_trajectory_map_matched_address(
+    collection: mpd.TrajectoryCollection, map_center: list
+) -> folium.Map:
+    """Cria um mapa com trajetórias MAP MATCHED, coloridas por street name, com info adicional do speed limit."""
+    m = folium.Map(location=map_center, zoom_start=14)
+
+    predefined_colors = [
+        "red",
+        "blue",
+        "green",
+        "orange",
+        "purple",
+        "yellow",
+        "brown",
+        "pink",
+        "gray",
+        "black",
+        "lightblue",
+        "lightgreen",
+        "lightred",
+        "lightgray",
+        "darkblue",
+        "darkgreen",
+        "darkred",
+        "darkpurple",
+        "beige",
+        "cadetblue",
+    ]
+    street_colors: Dict[str, str] = {}
+    color_index = 0
+
+    for traj in collection.trajectories:
+        if len(traj.df) < 2:
+            continue
+
+        speeds_by_address = calculate_avg_speed_by_address(traj)
+
+        for address, speed in speeds_by_address.items():
+            traj_subset = traj.df[traj.df["address"] == address]
+            if len(traj_subset) < 2:
+                continue
+
+            if address not in street_colors:
+                if color_index < len(predefined_colors):
+                    street_colors[address] = predefined_colors[color_index]
+                    color_index += 1
+                else:
+                    street_colors[address] = "gray"
+            color = street_colors[address]
+
+            # Recupera a informação de speed limit se presente na coluna "speed_limit"
+            speed_limit = (
+                traj_subset["speed_limit"].iloc[0]
+                if "speed_limit" in traj_subset.columns
+                else "N/A"
+            )
+
+            tooltip_text = (
+                f"Matched Segment {traj.id} ({address})<br>"
+                f"Start: {traj_subset.index[0]}<br>"
+                f"End: {traj_subset.index[-1]}<br>"
+                f"Avg Speed: {speed:.2f} km/h<br>"
+                f"Speed Limit: {speed_limit}<br>"
+                f"Duration: {(traj_subset.index[-1] - traj_subset.index[0]).total_seconds()/60:.2f} min<br>"
+                f"Num Points: {len(traj_subset)}"
+            )
+
+            # Cria a linha com as coordenadas convertendo (x, y) para (lat, lng)
+            line = LineString(traj_subset.geometry.tolist())
+            folium.PolyLine(
+                locations=[(p[1], p[0]) for p in line.coords],
+                color=color,
+                weight=8,
+                tooltip=tooltip_text,
+            ).add_to(m)
+
+            # Marcadores de início e fim da trajetória
+            start_point, end_point = line.coords[0], line.coords[-1]
+            folium.Marker(
+                location=[start_point[1], start_point[0]],
+                popup=f"Início ({address})",
+                icon=folium.Icon(color=color, icon="play", prefix="fa"),
+            ).add_to(m)
+            folium.Marker(
+                location=[end_point[1], end_point[0]],
+                popup=f"Fim ({address})",
+                icon=folium.Icon(color=color, icon="stop", prefix="fa"),
+            ).add_to(m)
+    return m
+
+
 def test_raw(session, identifier):
     """
     Testa a visualização de trajetórias com dados RAW (sem map matching).
@@ -289,9 +264,67 @@ def test_raw(session, identifier):
 
     m = create_trajectory_map_raw(collection, map_center)
 
-    map_filename = "trajectories_raw.html"
+    map_filename = "/Users/gilsilva/Work/thesis/output/trajectories_raw.html"
     m.save(map_filename)
     print(f"Raw trajectory map saved as {map_filename}")
+
+
+def test_matched_address_sumo(identifier, batch_size):
+    """
+    Testa a visualização de trajetórias com dados MAP MATCHED.
+    """
+
+    results = parse_csv_for_vehicle(
+        "/Users/gilsilva/Work/thesis/input/sumo/fcd.csv", identifier
+    )
+
+    matched_results = process_matched_trajectory(identifier, results, batch_size)
+
+    df = create_raw_df(matched_results)
+    gdf = create_geodataframe(df)
+    gdf = gdf.set_index("timestamp")
+
+    collection = mpd.TrajectoryCollection(gdf, "identifier")
+
+    map_center = [
+        gdf.iloc[0].geometry.y,
+        gdf.iloc[0].geometry.x,
+    ]
+
+    m = create_trajectory_map_matched_address(collection, map_center)
+
+    map_filename = f"/Users/gilsilva/Work/thesis/output/trajectories_matched_address_sumo_{identifier}.html"
+    m.save(map_filename)
+    print(f"Matched trajectory map saved as {map_filename}")
+
+
+def test_matched_address(session, identifier, batch_size):
+    """
+    Testa a visualização de trajetórias com dados MAP MATCHED e Snapped.
+    """
+
+    results = load_matched_probe_data(session, identifier)
+
+    matched_results = process_matched_trajectory(identifier, results, batch_size)
+
+    df = create_raw_df(matched_results)
+    gdf = create_geodataframe(df)
+    gdf = gdf.set_index("timestamp")
+
+    collection = mpd.TrajectoryCollection(gdf, "identifier")
+
+    map_center = [
+        gdf.iloc[0].geometry.y,
+        gdf.iloc[0].geometry.x,
+    ]
+
+    m = create_trajectory_map_matched_address(collection, map_center)
+
+    map_filename = (
+        "/Users/gilsilva/Work/thesis/output/trajectories_matched_address.html"
+    )
+    m.save(map_filename)
+    print(f"Matched trajectory map saved as {map_filename}")
 
 
 def test_matched(session, identifier, batch_size):
@@ -315,6 +348,6 @@ def test_matched(session, identifier, batch_size):
 
     m = create_trajectory_map_matched(collection, map_center)
 
-    map_filename = "trajectories_matched.html"
+    map_filename = "/Users/gilsilva/Work/thesis/output/trajectories_matched.html"
     m.save(map_filename)
     print(f"Matched trajectory map saved as {map_filename}")

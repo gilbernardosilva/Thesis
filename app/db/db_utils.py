@@ -1,7 +1,10 @@
+from typing import List, Tuple
+
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.models.probes import ProbeModel
+from app.schemas.location import LocationSTG
 
 
 def delete_table(db: Session, table_name: str) -> None:
@@ -50,3 +53,45 @@ def get_probe_by_identifier_and_timestamp(
         .first()
     )
     return probe
+
+
+def load_raw_probe_data_batch(session: Session) -> List[Tuple[float, float, int, str]]:
+
+    subquery = session.query(ProbeModel.identifier).distinct().limit(5).subquery()
+
+    results = (
+        session.query(
+            ProbeModel.lat, ProbeModel.lng, ProbeModel.timestamp, ProbeModel.identifier
+        )
+        .filter(ProbeModel.identifier.in_(subquery))
+        .order_by(ProbeModel.identifier, ProbeModel.timestamp)
+        .all()
+    )
+
+    return results
+
+
+def load_raw_probe_data(session: Session, identifier: str) -> List[Tuple]:
+    """Carrega dados de probes para um identificador específico."""
+
+    results = (
+        session.query(
+            ProbeModel.lat, ProbeModel.lng, ProbeModel.timestamp, ProbeModel.identifier
+        )
+        .filter_by(identifier=identifier)
+        .order_by(ProbeModel.timestamp)
+        .all()
+    )
+
+    return results
+
+
+def load_matched_probe_data(session: Session, identifier: str) -> List[LocationSTG]:
+    probes = (
+        session.query(ProbeModel)
+        .filter_by(identifier=identifier)
+        .order_by(ProbeModel.timestamp)
+        .all()
+    )
+    location_data = [LocationSTG(**probe.__dict__) for probe in probes]
+    return location_data

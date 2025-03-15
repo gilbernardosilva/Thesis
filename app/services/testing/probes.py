@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.probes import ProbeModel
 from app.models.road_type import RoadTypeModel
 from app.schemas.location import Location
-from app.services.api import fetch_road_info
+from app.services.api.api import fetch_road_info
 
 
 def query_all_probes_by_identifier(probe_base: ProbeModel, db: Session) -> list:

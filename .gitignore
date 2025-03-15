@@ -3,3 +3,6 @@ probes/*
 .env
 __pycache__
 tests.py
+*.html
+input
+output
