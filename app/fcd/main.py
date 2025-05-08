@@ -12,10 +12,8 @@ def main():
     """Main pipeline to process FCD data and predict congestion."""
 
     logging.info("Pipeline started.")
-    print("arroz")
 
     try:
-        print("Before loading and cleaning data")
         # load_and_clean_data()
 
         # print_n_random_rows(
@@ -29,15 +27,13 @@ def main():
 
         map_matching()
         print_n_random_rows(
-            "/Users/gilsilva/Work/thesis/output/dataframes/mapped_df.parquet", 200
+            "/Users/gilsilva/Work/thesis/output/dataframes/mapped_df.parquet"
         )
 
         # feature_engineer()
         # print_first_20_rows(
         #     "/Users/gilsilva/Work/thesis/output/dataframes/enriched_df.parquet"
         # )
-
-        # run_model()
 
     except Exception as e:
         logging.error(f"Error during pipeline execution: {str(e)}", exc_info=True)
