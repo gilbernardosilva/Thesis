@@ -1,0 +1,27 @@
+## Prerequisites for Valhalla Setup
+
+- Docker
+- Docker Compose
+- `wget` (optional, for downloading the data)
+
+## Setup Instructions
+
+### 1. Download OSM Data
+
+Download the latest Portugal OSM data from [Geofabrik](https://download.geofabrik.de/europe/portugal.html) or using the command below:
+
+```bash
+wget https://download.geofabrik.de/europe/portugal-latest.osm.pbf
+```
+
+### 2. Place the File in the Valhalla Data Directory
+
+mv portugal-latest.osm.pbf valhalla/data/
+
+### 3. Run with docker compose
+
+```bash
+docker compose up -d
+```
+
+It's normal that initial setup takes some time, as it is loading the graph and generating the necessary tiles.

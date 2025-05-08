@@ -1,0 +1,18 @@
+version: "3.9"
+services:
+  valhalla:
+    image: ghcr.io/nilsnolde/docker-valhalla/valhalla:latest
+    container_name: valhalla
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data:/custom_files
+    environment:
+      - tile_urls=/custom_files/portugal-latest.osm.pbf
+      - build_elevation=false
+      - use_tiles_ignore_pbf=true
+      - force_rebuild=false
+      - threads=4
+      - build_admins=true
+      - build_timezones=true

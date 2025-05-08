@@ -6,3 +6,5 @@ tests.py
 *.html
 input
 output
+cache
+valhalla/data/*
