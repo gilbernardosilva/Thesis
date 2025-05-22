@@ -3,6 +3,7 @@
 - Docker
 - Docker Compose
 - `wget` (optional, for downloading the data)
+- Python / Pyenv
 
 ## Setup Instructions
 
@@ -16,12 +17,33 @@ wget https://download.geofabrik.de/europe/portugal-latest.osm.pbf
 
 ### 2. Place the File in the Valhalla Data Directory
 
+```bash
+mkdir -p valhalla/data
 mv portugal-latest.osm.pbf valhalla/data/
+```
 
-### 3. Run with docker compose
+### 3. Run Valhalla with docker compose
 
 ```bash
 docker compose up -d
 ```
 
-It's normal that initial setup takes some time, as it is loading the graph and generating the necessary tiles.
+It's normal that initial setup (first time running) takes some time, as it is loading the graph and generating the necessary tiles.
+
+### 4. Setup the requirements with venv and pip
+
+```bash
+pyenv local 3.11.8 # If not installed : pyenv install 3.11.8
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 5. Prepare Probe Data
+Insert probes into the input file to start the pipeline
+
+### 6. Run the Pipeline
+
+```bash
+python -m app.fcd.main
+```

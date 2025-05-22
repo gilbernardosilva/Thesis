@@ -1,9 +1,9 @@
 import logging
 import os
 
-from app.fcd.config.variables import BASE_PATH, LOG_FORMAT, LOG_LEVEL
+from app.fcd.config.variables import LOG_FORMAT, LOG_LEVEL, PROJECT_BASE_PATH
 
-log_file = os.path.join(BASE_PATH, "output", "pipeline.log")
+log_file = os.path.join(PROJECT_BASE_PATH, "output", "pipeline.log")
 os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
 logging.basicConfig(

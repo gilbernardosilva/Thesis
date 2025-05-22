@@ -1,105 +1,173 @@
 import logging
+import os
 import time
 
 import dask.dataframe as dd
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+from dask.diagnostics import ProgressBar
+from dask.distributed import Client, LocalCluster
 
-from app.fcd.config.variables import ENRICHED_DF, MAPPED_DF
+from app.fcd.config.schemas import FEATURES_DATA_SCHEMA
+from app.fcd.config.utils import ensure_directory_exists
+from app.fcd.config.variables import (
+    FEATURES_DATA_FILE,
+    MAPPED_DATA_FILE,
+    OFF_PEAK_HOURS,
+)
 
 
-def feature_engineer():
-    start = time.time()
-    logging.info("Loading mapped FCD data from Parquet…")
-    df = dd.read_parquet(MAPPED_DF)
-    logging.info(f"Initial number of partitions: {df.npartitions}")
-    sample = df.head(10)
+def calculate_sri(
+    df,
+    speed_column="speed",
+    free_flow_column="free_flow_speed",
+):
+    """Calculate Speed Reduction Index (SRI) using free_flow_speed."""
+    df[free_flow_column] = df[free_flow_column].clip(lower=1e-6)
+    df[speed_column] = df[speed_column].clip(lower=0)
+
+    sri = 1 - df[speed_column] / df[free_flow_column]
+    return sri.clip(lower=0, upper=1).replace([np.inf, -np.inf], np.nan)
+
+
+def compute_free_flow_speed(ddf):
+    """Compute 95th percentile free flow speed during off-peak hours using Pandas."""
+    night_ddf = ddf[ddf["timestamp"].dt.hour.isin(OFF_PEAK_HOURS)][["edge_id", "speed"]]
+    logging.info(f"Rows in night_ddf: {night_ddf.shape[0].compute()}")
+
+    night_pdf = night_ddf.compute()
+
+    free_flow_pdf = (
+        night_pdf.groupby("edge_id")["speed"]
+        .quantile(0.95)
+        .reset_index()
+        .rename(columns={"speed": "free_flow_speed"})
+    )
+
+    free_flow_pdf = free_flow_pdf.astype(
+        {"edge_id": "int64", "free_flow_speed": "float32"}
+    )
+
+    free_flow_ddf = dd.from_pandas(free_flow_pdf, npartitions=2).persist()
+
+    unique_edge_ids = free_flow_ddf["edge_id"].nunique().compute()
+    logging.info(f"Number of unique edge_ids in free_flow_ddf: {unique_edge_ids}")
+    logging.info(f"Rows in free_flow_ddf: {free_flow_ddf.shape[0].compute()}")
     logging.info(
-        f"After loading data: Duplicated indices in sample: {sample.index.duplicated().any()}"
+        f"Free-flow speed range: {free_flow_ddf['free_flow_speed'].min().compute()} to "
+        f"{free_flow_ddf['free_flow_speed'].max().compute()}"
     )
-    logging.info(f"After loading data: Sample index head: {sample.index.tolist()}")
-    logging.info("Resetting index after loading data…")
-    df = df.reset_index(drop=True)
-    sample = df.head(10)
     logging.info(
-        f"After initial reset: Duplicated indices in sample: {sample.index.duplicated().any()}"
+        f"Sample edge_id in free_flow_ddf: {free_flow_ddf['edge_id'].head().tolist()}"
     )
-    logging.info(f"After initial reset: Sample index head: {sample.index.tolist()}")
-    df["timestamp"] = df["timestamp"].astype("datetime64[ns]")
-    df["time_window"] = df["timestamp"].dt.floor("5min")
-    logging.info("Calculating aggregated features per segment and time window…")
-    grouped = df.groupby(["segment", "time_window"])
-    avg_speed = grouped["speed"].mean().rename("avg_speed")
-    std_speed = grouped["speed"].std().rename("std_speed")
-    median_speed = grouped["speed"].median().rename("median_speed")
-    vehicle_count = grouped.size().rename("vehicle_count")
-    features = dd.concat([avg_speed, std_speed, median_speed, vehicle_count], axis=1)
-    features["hour"] = features.index.get_level_values("time_window").hour
-    features["day_of_week"] = features.index.get_level_values("time_window").dayofweek
-    features["is_weekend"] = (features["day_of_week"] >= 5).astype(int)
-    features["time_of_day_sin"] = np.sin(2 * np.pi * features["hour"] / 24)
-    features["time_of_day_cos"] = np.cos(2 * np.pi * features["hour"] / 24)
-    logging.info("Persisting after time features…")
-    features = features.persist()
-    sample = features.head(10)
-    logging.info(
-        f"After time features: Duplicated indices in sample: {sample.index.duplicated().any()}"
-    )
-    logging.info(f"After time features: Sample index head: {sample.index.tolist()}")
-    logging.info("Calculating lag features…")
-    features = features.sort_index(level=["segment", "time_window"])
-    features["speed_lag1"] = grouped["speed"].mean().shift(1)
-    features["speed_lag2"] = grouped["speed"].mean().shift(2)
-    features["speed_diff"] = grouped["speed"].mean().diff()
-    logging.info("Persisting after lag features…")
-    features = features.persist()
-    sample = features.head(10)
-    logging.info(
-        f"After lag features: Duplicated indices in sample: {sample.index.duplicated().any()}"
-    )
-    logging.info(f"After lag features: Sample index head: {sample.index.tolist()}")
-    logging.info("Defining congestion label based on historical speed percentile…")
-    historical_speeds = dd.read_parquet("./data/historical_speeds.parquet")
-    features = features.merge(
-        historical_speeds[["speed_p25"]], left_on="segment", right_index=True
-    )
-    features["speed_ratio"] = features["avg_speed"] / features["speed_p25"]
-    features["congestion"] = (features["avg_speed"] < features["speed_p25"]).astype(
-        "int8"
-    )
-    congestion_dist = features["congestion"].value_counts(normalize=True).compute()
-    logging.info(f"Congestion distribution: {congestion_dist.to_dict()}")
-    speed_stats = features["avg_speed"].describe().compute()
-    logging.info(f"Average speed statistics: {speed_stats.to_dict()}")
-    logging.info("Repartitioning DataFrame with partition size 500MB…")
-    features = features.repartition(partition_size="500MB")
-    logging.info(f"Number of partitions after repartition: {features.npartitions}")
-    sample = features.head(10)
-    logging.info(
-        f"After repartition: Duplicated indices in sample: {sample.index.duplicated().any()}"
-    )
-    logging.info(f"After repartition: Sample index head: {sample.index.tolist()}")
-    logging.info("Saving enriched FCD dataframe to Parquet…")
-    enriched_df = features.reset_index()[
-        [
-            "segment",
-            "time_window",
-            "avg_speed",
-            "std_speed",
-            "median_speed",
-            "vehicle_count",
-            "hour",
-            "day_of_week",
-            "is_weekend",
-            "time_of_day_sin",
-            "time_of_day_cos",
-            "speed_lag1",
-            "speed_lag2",
-            "speed_diff",
-            "speed_ratio",
-            "congestion",
-        ]
+
+    return free_flow_ddf
+
+
+def aggregate_and_calculate(ddf, free_flow_ddf):
+    """Aggregate data and calculate features."""
+    required_columns = [
+        "traj_id",
+        "edge_id",
+        "timestamp",
+        "speed",
+        "speed_segment",
     ]
-    enriched_df.to_parquet(ENRICHED_DF, engine="pyarrow", compression="snappy")
-    logging.info("Enrichment completed.")
-    logging.info(f"Finished enrichment in {time.time() - start:.2f} seconds")
+
+    missing_columns = [col for col in required_columns if col not in ddf.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+
+    probe_ddf = ddf[required_columns].astype({"edge_id": "int64"})
+    logging.info(f"Rows in probe_ddf: {probe_ddf.shape[0].compute()}")
+    logging.info(
+        f"Unique edge_ids in probe_ddf: {probe_ddf['edge_id'].nunique().compute()}"
+    )
+    logging.info(f"Sample edge_id in probe_ddf: {probe_ddf['edge_id'].head().tolist()}")
+
+    free_flow_ddf = free_flow_ddf.drop_duplicates(subset=["edge_id"])
+    logging.info(
+        f"Rows in free_flow_ddf after deduplication: {free_flow_ddf.shape[0].compute()}"
+    )
+
+    merged_ddf = probe_ddf.merge(
+        free_flow_ddf, on="edge_id", how="left", suffixes=("", "_free_flow")
+    ).persist()
+    logging.info(f"Rows in merged_ddf: {merged_ddf.shape[0].compute()}")
+
+    if merged_ddf["speed_segment"].isna().any().compute():
+        raise ValueError("Valores nulos encontrados em speed_segment")
+    merged_ddf["speed_segment"] = merged_ddf["speed_segment"].clip(lower=5, upper=200)
+
+    # Substituir NaN em free_flow_speed por speed_segment
+    merged_ddf["free_flow_speed"] = merged_ddf["free_flow_speed"].fillna(
+        merged_ddf["speed_segment"]
+    )
+
+    merged_ddf["sri"] = calculate_sri(merged_ddf)
+    sri_extreme_count = merged_ddf["sri"].isin([0, 1]).sum().compute()
+    logging.info(f"Registros com SRI extremo (0 ou 1): {sri_extreme_count}")
+
+    merged_ddf["day_of_week"] = merged_ddf["timestamp"].dt.dayofweek.astype("int8")
+    merged_ddf["hour"] = merged_ddf["timestamp"].dt.hour.astype("int8")
+    merged_ddf["is_peak_hour"] = (
+        merged_ddf["timestamp"].dt.hour.isin([7, 8, 17, 18]).astype("int8")
+    )
+    merged_ddf["is_weekend"] = (
+        merged_ddf["timestamp"].dt.dayofweek.isin([5, 6]).astype("int8")
+    )
+
+    nan_sri_count = merged_ddf["sri"].isna().sum().compute()
+    logging.info(f"Number of NaN SRI values: {nan_sri_count}")
+
+    logging.info(f"Data types in merged_ddf before writing: {merged_ddf.dtypes}")
+
+    return merged_ddf
+
+
+def feature_engineering():
+    """Execute feature engineering pipeline."""
+    start_ts = time.time()
+    logging.info("Starting feature engineering pipeline...")
+
+    if os.path.exists(FEATURES_DATA_FILE):
+        logging.info(
+            "Output file already exists, skipping feature engineering pipeline."
+        )
+        return
+
+    ensure_directory_exists(os.path.dirname(FEATURES_DATA_FILE))
+
+    cluster = LocalCluster(n_workers=2, threads_per_worker=1, memory_limit="3GB")
+    client = Client(cluster)
+    try:
+        ddf = dd.read_parquet(MAPPED_DATA_FILE, engine="pyarrow")
+        logging.info(f"Input rows: {ddf.shape[0].compute()}")
+        logging.info(f"Sample edge_id in input ddf: {ddf['edge_id'].head().tolist()}")
+
+        free_flow_ddf = compute_free_flow_speed(ddf)
+        result_ddf = aggregate_and_calculate(ddf, free_flow_ddf)
+
+        logging.info(f"Output rows before writing: {result_ddf.shape[0].compute()}")
+        with ProgressBar():
+            result_ddf.to_parquet(
+                FEATURES_DATA_FILE,
+                engine="pyarrow",
+                compression="snappy",
+                write_index=False,
+                schema=FEATURES_DATA_SCHEMA,
+            )
+        logging.info(
+            f"Feature engineering completed in {time.time() - start_ts:.2f} seconds."
+        )
+    except Exception as e:
+        logging.error(f"Pipeline failed: {e}")
+        raise
+    finally:
+        client.close()
+        cluster.close()
+
+
+if __name__ == "__main__":
+    feature_engineering()

@@ -4,7 +4,8 @@ probes/*
 __pycache__
 tests.py
 *.html
-input
-output
+input/probes_data
+output/*
 cache
-valhalla/data/*
+valhalla/data/
+.DS_Store

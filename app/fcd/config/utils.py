@@ -21,36 +21,50 @@ def count_csv_lines(file_path: str) -> int:
         return 0
 
 
-def ensure_directory_exists(path: str):
-    """Ensure the directory for the given path exists."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def ensure_directory_exists(path: str) -> None:
+    """
+    Ensure the directory for the given path exists, creating it if necessary.
+    """
+    if not path:
+        logging.error("Path is empty")
+        raise ValueError("Path cannot be empty")
+
+    dir_path = os.path.dirname(path)
+    if not dir_path:
+        logging.error(f"No directory component in path: {path}")
+        raise ValueError(f"Path {path} has no directory component")
+
+    try:
+        os.makedirs(dir_path, exist_ok=True)
+        if not os.path.exists(dir_path):
+            logging.error(f"Failed to create directory: {dir_path}")
+            raise OSError(f"Directory {dir_path} could not be created")
+        if not os.access(dir_path, os.W_OK):
+            logging.error(f"No write permission for directory: {dir_path}")
+            raise OSError(f"Directory {dir_path} is not writable")
+        logging.debug(f"Directory {dir_path} verified or created")
+    except OSError as e:
+        logging.error(f"Error creating directory {dir_path}: {e}")
+        raise
 
 
-def print_n_random_rows(file_path: str, n: int = 20):
+def print_n_first_rows(file_path: str, n: int = 20):
     """Print the first n rows from a Parquet file."""
     if not file_path.endswith((".parq", ".parquet", ".pq")):
         raise ValueError(f"File must be a Parquet file: {file_path}")
 
     logging.info(f"Reading first {n} rows from {file_path}")
     try:
-        # Read with Dask for efficiency
         ddf = dd.read_parquet(file_path)
 
-        # Print total number of rows
         total_rows = ddf.shape[0].compute()
-        print(f"Total number of rows: {total_rows}")
+        logging.info(f"Total number of rows: {total_rows}")
 
         logging.info("Columns and dtypes:")
-        print(ddf.dtypes)
+        logging.info(ddf.dtypes)
 
-        # Display first n rows using head()
         logging.info(f"First {n} rows:")
-        print(ddf.head(n))
-
-        # Read schema with pyarrow
-        logging.info("Parquet schema:")
-        table = pq.read_table(file_path)
-        print(table.schema)
+        logging.info(ddf.head(n))
 
     except Exception as e:
         logging.error(f"Failed to read Parquet file {file_path}: {str(e)}")

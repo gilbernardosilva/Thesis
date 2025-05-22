@@ -8,13 +8,10 @@ import dask.dataframe as dd
 from dask.diagnostics import ProgressBar
 from distributed import Client, LocalCluster
 
-from app.fcd.config.schemas import (
-    CLEAN_INPUT_SCHEMA,
-    CLEAN_OUTPUT_SCHEMA,
-    CLEAN_REQUIRED_COLUMNS,
-)
+from app.fcd.config.schemas import CLEAN_DATA_SCHEMA, INPUT_CSV_SCHEMA
+from app.fcd.config.utils import ensure_directory_exists
 from app.fcd.config.variables import (
-    CLEAN_DF,
+    CLEAN_DATA_FILE,
     MAX_HDOP,
     MAX_SPEED,
     PROBES_FOLDER,
@@ -31,7 +28,7 @@ def load_existing_cleaned_data(output_file: str) -> Optional[dd.DataFrame]:
 
     try:
         logging.info("Loading existing cleaned data: %s", output_file)
-        return dd.read_parquet(output_file)
+        return dd.read_parquet(output_file, engine="pyarrow", schema=CLEAN_DATA_SCHEMA)
     except Exception as e:
         logging.warning("Failed to load cleaned data (%s): %s", output_file, e)
         return None
@@ -42,7 +39,7 @@ def process_file(file_path: str) -> Optional[dd.DataFrame]:
     logging.info("Processing %s", os.path.basename(file_path))
     try:
         ddf = dd.read_csv(
-            file_path, blocksize="128MB", dtype=CLEAN_INPUT_SCHEMA, assume_missing=True
+            file_path, blocksize="128MB", dtype_backend="pyarrow", assume_missing=True
         )
         return validate_and_clean_dask(ddf, file_path)
     except Exception as e:
@@ -52,7 +49,8 @@ def process_file(file_path: str) -> Optional[dd.DataFrame]:
 
 def validate_and_clean_dask(ddf: dd.DataFrame, file: str) -> dd.DataFrame:
     """Validate and clean a Dask DataFrame."""
-    missing = [col for col in CLEAN_REQUIRED_COLUMNS if col not in ddf.columns]
+    required_columns = INPUT_CSV_SCHEMA.names
+    missing = [col for col in required_columns if col not in ddf.columns]
     if missing:
         raise ValueError(f"Missing columns in {file}: {missing}")
 
@@ -68,8 +66,7 @@ def validate_and_clean_dask(ddf: dd.DataFrame, file: str) -> dd.DataFrame:
         & ddf["timestamp"].notnull()
     )
 
-    df_clean = ddf[mask].drop(columns=["hdop", "ground"])
-    df_clean = df_clean.astype(CLEAN_OUTPUT_SCHEMA)
+    df_clean = ddf[mask][CLEAN_DATA_SCHEMA.names]
 
     invalid_ts, invalid_coords, nat_count, total_rows, clean_rows = dask.compute(
         (~((ddf["timestamp"] > TS_START) & (ddf["timestamp"] < TS_END))).sum(),
@@ -100,27 +97,29 @@ def validate_and_clean_dask(ddf: dd.DataFrame, file: str) -> dd.DataFrame:
 
 
 def load_and_clean_data(
-    folder_path: str = PROBES_FOLDER, output_file: str = CLEAN_DF
+    input_folder_path: str = PROBES_FOLDER, output_file: str = CLEAN_DATA_FILE
 ) -> dd.DataFrame:
     """Load and clean all CSV files in a folder."""
     start = time.time()
 
     cluster = LocalCluster(
-        n_workers=4,
+        n_workers=2,
         threads_per_worker=2,
-        memory_limit="auto",
+        memory_limit="2.7GB",
     )
+    client = Client(cluster)
 
-    with Client(cluster):
+    try:
         if (df := load_existing_cleaned_data(output_file)) is not None:
             return df
 
         all_files = [
             entry.path
-            for entry in os.scandir(folder_path)
+            for entry in os.scandir(input_folder_path)
             if entry.name.endswith(".csv") and entry.is_file()
         ]
         if not all_files:
+            logging.error("No CSV files found in %s", input_folder_path)
             raise FileNotFoundError("No CSV files found in the folder.")
 
         logging.info("%d files found.", len(all_files))
@@ -143,11 +142,23 @@ def load_and_clean_data(
         final_ddf = dd.concat(cleaned_ddfs, ignore_index=True)
 
         logging.info("Saving cleaned data to Parquet...")
+        ensure_directory_exists(os.path.dirname(output_file))
         with ProgressBar():
-            final_ddf.to_parquet(output_file, engine="pyarrow", write_index=False)
+            final_ddf.to_parquet(
+                output_file,
+                engine="pyarrow",
+                schema=CLEAN_DATA_SCHEMA,
+                write_index=False,
+                compression="snappy",
+            )
 
         logging.info(
             "Cleaned data saved to %s in %.2fs", output_file, time.time() - start
         )
 
         return final_ddf
+
+    finally:
+        logging.info("Shutting down Dask client and cluster...")
+        client.close()
+        cluster.close()
