@@ -156,7 +156,6 @@ def load_filter_region() -> None:
         logging.info("Applying spatial filter using GeoPandas")
         filtered_ddf = ddf_bbox.map_partitions(spatial_filter_partition, polygon)
 
-        # Compute total and filtered counts
         with ProgressBar():
             total_rows, filtered_rows = dask.compute(
                 total_rows_before_filter, filtered_ddf.shape[0]

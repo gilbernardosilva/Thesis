@@ -71,15 +71,47 @@ def print_n_first_rows(file_path: str, n: int = 20):
         raise
 
 
+def export_n_first_rows_to_csv(file_path: str, output_csv_path: str, n: int = 100):
+    """Export the first n rows from a Parquet file to a CSV file."""
+    if not file_path.endswith((".parq", ".parquet", ".pq")):
+        raise ValueError(f"File must be a Parquet file: {file_path}")
+
+    logging.info(f"Reading first {n} rows from {file_path}")
+    try:
+        ddf = dd.read_parquet(file_path)
+
+        total_rows = ddf.shape[0].compute()
+        logging.info(f"Total number of rows: {total_rows}")
+
+        logging.info("Columns and dtypes:")
+        logging.info(ddf.dtypes)
+
+        logging.info(f"Exporting first {n} rows to {output_csv_path}")
+        df_head = ddf.head(n, compute=True)
+
+        os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
+
+        df_head.to_csv(
+            output_csv_path,
+            index=False,
+            float_format="%.6f",
+            encoding="utf-8",
+        )
+        logging.info(f"Successfully exported {n} rows to {output_csv_path}")
+
+    except Exception as e:
+        logging.error(
+            f"Failed to process Parquet file {file_path} or write to {output_csv_path}: {str(e)}"
+        )
+        raise
+
+
 def print_summary(mapped_df: pd.DataFrame, enriched_df: pd.DataFrame):
     """Print a summary of the processed data."""
-
     logging.info("\n=== SUMMARY ===")
-
     probe_ids = (
         mapped_df["probe_id"].nunique() if "probe_id" in mapped_df.columns else "N/A"
     )
-
     logging.info(f"Unique probe IDs: {probe_ids}")
     logging.info(f"Unique segments (raw): {mapped_df['segment'].nunique()}")
     logging.info(f"Unique segments (aggregated): {enriched_df['segment'].nunique()}")

@@ -1,6 +1,8 @@
 import logging
 import os
 
+import pandas as pd
+
 from app.fcd.config.variables import LOG_FORMAT, LOG_LEVEL, PROJECT_BASE_PATH
 
 log_file = os.path.join(PROJECT_BASE_PATH, "output", "pipeline.log")
@@ -13,3 +15,5 @@ logging.basicConfig(
 )
 
 logging.debug("Logger initialized.")
+pd.set_option("future.no_silent_downcasting", True)
+logging.getLogger("distributed").setLevel(logging.ERROR)

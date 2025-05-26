@@ -2,476 +2,226 @@ import logging
 import os
 import pickle
 
-import dask.dataframe as dd
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from lightgbm import LGBMClassifier
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
     confusion_matrix,
     f1_score,
-    precision_score,
-    recall_score,
 )
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import GroupKFold, train_test_split
+from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
 
-from app.fcd.config.variables import (
-    FEATURES_DATA_FILE,
-    LABEL_ENCODER_PATH,
-    LOG_FORMAT,
-    LOG_LEVEL,
-    MODEL_PATH,
-    PROJECT_BASE_PATH,
-    SCALER_PARAMS_PATH,
-)
-
-LOG_FILE = os.path.join(os.path.dirname(MODEL_PATH), "congestion_model.log")
-os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format=LOG_FORMAT,
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(),
-    ],
-)
+from app.fcd.config.variables import FEATURES_DATA_FILE, MODEL_PATH, SCALER_PARAMS_PATH
 
 
 class CongestionModel:
     CLASSES = ["none", "light", "moderate", "severe"]
 
-    def __init__(
-        self,
-        model_path=MODEL_PATH,
-        scaler_params_path=SCALER_PARAMS_PATH,
-        label_encoder_path=LABEL_ENCODER_PATH,
-    ):
+    def __init__(self, model_path=MODEL_PATH, scaler_path=SCALER_PARAMS_PATH):
+        """Initialize the model with paths for saving/loading."""
         self.model_path = model_path
-        self.scaler_params_path = scaler_params_path
-        self.label_encoder_path = label_encoder_path
+        self.scaler_path = scaler_path
         self.model = None
-        self.scaler_params = None
-        self.label_encoder = None
-        self.edge_id_encoder = None
+        self.scaler = None
+        self.feature_names = None
         self._load_model_files()
 
     def _load_model_files(self):
-        if os.path.exists(self.model_path):
+        """Load saved model and scaler if they exist."""
+        if os.path.exists(self.model_path) and os.path.exists(self.scaler_path):
             with open(self.model_path, "rb") as f:
                 self.model = pickle.load(f)
-        if os.path.exists(self.scaler_params_path):
-            with open(self.scaler_params_path, "rb") as f:
-                self.scaler_params = pickle.load(f)
-        if os.path.exists(self.label_encoder_path):
-            with open(self.label_encoder_path, "rb") as f:
-                self.label_encoder = pickle.load(f)
-        edge_id_encoder_path = os.path.join(
-            os.path.dirname(self.model_path), "edge_id_encoder.pkl"
-        )
-        if os.path.exists(edge_id_encoder_path):
-            with open(edge_id_encoder_path, "rb") as f:
-                self.edge_id_encoder = pickle.load(f)
-        if all(
-            [self.model, self.scaler_params, self.label_encoder, self.edge_id_encoder]
-        ):
-            logging.info("Model and parameters loaded successfully.")
+            with open(self.scaler_path, "rb") as f:
+                self.scaler = pickle.load(f)
+            logging.info("Model and scaler loaded successfully.")
         else:
-            logging.info("Model not loaded; train a new model with train_model.")
+            logging.info("No existing model found. Please train a new model.")
 
-    def _fill_nan(self, df: pd.DataFrame, set_name: str) -> pd.DataFrame:
-        """Handle NaN values in the DataFrame."""
-        logging.info(f"Verificando valores NaN nas features de {set_name}...")
-        nan_counts = df.isna().sum()
-        logging.info(f"NaN por coluna ({set_name}):\n{nan_counts.to_string()}")
-        if nan_counts.any():
-            logging.warning(
-                f"Valores NaN encontrados nas features de {set_name}. Preenchendo com 0..."
-            )
-            df = df.fillna(0)
-        return df
+    def _create_label(self, sri: float) -> int:
+        """Create a multiclass label (0-3) from SRI."""
+        sri = max(0.0, min(1.0, sri))  # Clip SRI to [0, 1]
+        if sri < 0.15:
+            return 0  # None
+        elif sri < 0.35:
+            return 1  # Light
+        elif sri < 0.70:
+            return 2  # Moderate
+        else:
+            return 3  # Severe
 
-    def _normalize_features(self, x_train: pd.DataFrame, x_test: pd.DataFrame) -> tuple:
-        """Normalize features using mean and standard deviation from training data."""
-        self.scaler_params = {}
-        x_train = x_train.copy()
-        x_test = x_test.copy()
-        for col in x_train.columns:
-            if col != "edge_id":
-                mean = x_train[col].mean()
-                std = x_train[col].std()
-                self.scaler_params[col] = {"mean": mean, "std": std}
-                if std > 0:
-                    x_train.loc[:, col] = (x_train[col] - mean) / std
-                    x_test.loc[:, col] = (x_test[col] - mean) / std
-                else:
-                    x_train.loc[:, col] = 0
-                    x_test.loc[:, col] = 0
-                if x_train[col].isna().any() or x_test[col].isna().any():
-                    logging.warning(
-                        f"NaN encontrados em {col} após normalização. Preenchendo com 0..."
-                    )
-                    x_train.loc[:, col] = x_train[col].fillna(0)
-                    x_test.loc[:, col] = x_test[col].fillna(0)
-        return x_train, x_test
-
-    def _evaluate(self, x_test: pd.DataFrame, y_test: pd.Series) -> dict:
-        """Evaluate the model on the test set."""
-        probabilities = self.model.predict_proba(x_test)
-        pred_labels = self.label_encoder.inverse_transform(
-            np.argmax(probabilities, axis=1)
-        )
-        accuracy = accuracy_score(y_test, pred_labels)
-        f1 = f1_score(y_test, pred_labels, average="weighted", zero_division=0)
-        precision = precision_score(
-            y_test, pred_labels, average="weighted", zero_division=0
-        )
-        recall = recall_score(y_test, pred_labels, average="weighted", zero_division=0)
-        conf_matrix = confusion_matrix(y_test, pred_labels, labels=self.CLASSES)
-        report = classification_report(
-            y_test, pred_labels, labels=self.CLASSES, zero_division=0
-        )
-        per_class_f1 = f1_score(y_test, pred_labels, average=None, zero_division=0)
-
-        logging.info("Test set evaluation metrics:")
-        logging.info(f"Accuracy: {accuracy:.4f}")
-        logging.info(f"F1 Score (weighted): {f1:.4f}")
-        logging.info(f"Per-class F1 scores: {dict(zip(self.CLASSES, per_class_f1))}")
-        logging.info(f"Precision: {precision:.4f}")
-        logging.info(f"Recall: {recall:.4f}")
-        logging.info(f"Confusion Matrix:\n{conf_matrix}")
-        logging.info(f"Classification Report:\n{report}")
-
-        return {
-            "accuracy": accuracy,
-            "f1": f1,
-            "precision": precision,
-            "recall": recall,
-        }
-
-    def train_model(self, data_path=FEATURES_DATA_FILE):
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"The file {data_path} was not found.")
-        logging.info(f"Loading data from {data_path} for training...")
-        ddf = dd.read_parquet(
-            data_path,
-            engine="pyarrow",
-            columns=[
-                "timestamp",
-                "traj_id",
-                "edge_id",
-                "speed",
-                "free_flow_speed",
-                "speed_segment",
-                "sri",
-            ],
-        )
-
-        logging.info("Verificando NaN nos dados brutos...")
-        nan_counts_raw = ddf.isna().sum().compute()
-        logging.info(f"NaN nos dados brutos:\n{nan_counts_raw.to_string()}")
-
-        self.edge_id_encoder = LabelEncoder()
-        edge_ids = ddf["edge_id"].compute()
-        self.edge_id_encoder.fit(edge_ids)
-        logging.info(
-            f"Encoded {len(self.edge_id_encoder.classes_)} unique edge_id values"
-        )
-
-        data = self._create_windows(ddf)
-        if data.empty:
-            raise ValueError("No valid windows created for training.")
-
+    def _prepare_data(self, df):
+        """Prepare features and labels from the dataframe for model training/prediction."""
         features = [
-            "speed_mean",
-            "free_flow_speed_mean",
-            "speed_change",
-            "hour",
             "day_of_week",
+            "hour",
             "is_peak_hour",
             "is_weekend",
-            "edge_id",
+            "length_segment",
+            "road_class_encoded",
+            "probe_speed",
+            "avg_speed_segment",
+            "speed_bin_0",
+            "speed_bin_1",
+            "speed_bin_2",
+            "speed_bin_3",
+            "speed_bin_4",
+            "total_stopped_time_per_edge_per_traj",  # New metric replacing avg_stopped_time_seconds
         ]
-        x = data[features + ["traj_id"]].copy()
-        y = data["label"]
+        x = df[features + ["traj_id"]].copy()
+        y = df["sri"].apply(self._create_label)
+        return x, y
 
-        # Log feature correlations to diagnose overfitting
-        correlation = x[features].corr()
-        logging.info(f"Feature correlations:\n{correlation}")
+    def _evaluate(self, model, x_test, y_test, model_type):
+        """Evaluate the model and log performance metrics with model name."""
+        x_test_df = pd.DataFrame(x_test, columns=self.feature_names)
+        y_pred = model.predict(x_test_df)
+        accuracy = accuracy_score(y_test, y_pred)
+        f1 = f1_score(y_test, y_pred, average="weighted")
+        conf_matrix = confusion_matrix(y_test, y_pred, labels=[0, 1, 2, 3])
+        report = classification_report(y_test, y_pred, target_names=self.CLASSES)
+        logging.info(f"Model: {model_type}")
+        logging.info(f"Accuracy: {accuracy:.4f}")
+        logging.info(f"F1 Score (weighted): {f1:.4f}")
+        logging.info(f"Confusion Matrix:\n{conf_matrix}")
+        logging.info(f"Classification Report:\n{report}")
+        return accuracy, f1
 
-        # Divisão 70-30 por traj_id
-        unique_traj_ids = (
-            x["traj_id"].unique().tolist()
-        )  # Convert to list to avoid indexing issues
+    def train_model(
+        self, data_path=FEATURES_DATA_FILE, model_type="lightgbm", cv_folds=0
+    ):
+        """Train the model with optional cross-validation and evaluate."""
+        df = pd.read_parquet(data_path)
+        x, y = self._prepare_data(df)
+
+        traj_ids = df["traj_id"].unique()
         traj_train, traj_test = train_test_split(
-            unique_traj_ids, test_size=0.3, random_state=42
+            traj_ids, test_size=0.3, random_state=42
         )
-        x_train = x[x["traj_id"].isin(traj_train)].drop(columns=["traj_id"]).copy()
-        x_test = x[x["traj_id"].isin(traj_test)].drop(columns=["traj_id"]).copy()
+        x_train = x[x["traj_id"].isin(traj_train)]
+        x_test = x[x["traj_id"].isin(traj_test)]
         y_train = y[x["traj_id"].isin(traj_train)]
         y_test = y[x["traj_id"].isin(traj_test)]
 
-        logging.info(
-            f"Training set: {len(x_train)} samples, {len(traj_train)} trajectories"
+        if cv_folds > 0:
+            logging.info(
+                f"Performing {cv_folds}-fold cross-validation for {model_type}..."
+            )
+            gkf = GroupKFold(n_splits=cv_folds)
+            groups = x_train["traj_id"]
+            cv_accuracies = []
+            cv_f1_scores = []
+            for fold, (train_idx, val_idx) in enumerate(
+                gkf.split(x_train, y_train, groups)
+            ):
+                x_train_fold = x_train.iloc[train_idx].drop(columns=["traj_id"])
+                x_val_fold = x_train.iloc[val_idx].drop(columns=["traj_id"])
+                y_train_fold = y_train.iloc[train_idx]
+                y_val_fold = y_train.iloc[val_idx]
+
+                scaler = StandardScaler()
+                x_train_fold_scaled = scaler.fit_transform(x_train_fold)
+                x_val_fold_scaled = scaler.transform(x_val_fold)
+
+                x_train_fold_scaled = pd.DataFrame(
+                    x_train_fold_scaled, columns=x_train_fold.columns
+                )
+                x_val_fold_scaled = pd.DataFrame(
+                    x_val_fold_scaled, columns=x_val_fold.columns
+                )
+
+                if model_type == "lightgbm":
+                    model = LGBMClassifier(
+                        objective="multiclass", num_class=4, random_state=42
+                    )
+                elif model_type == "xgboost":
+                    model = XGBClassifier(
+                        objective="multi:softprob", num_class=4, random_state=42
+                    )
+                else:
+                    raise ValueError(
+                        "Unsupported model_type. Use 'lightgbm' or 'xgboost'."
+                    )
+
+                model.fit(x_train_fold_scaled, y_train_fold)
+                y_pred = model.predict(x_val_fold_scaled)
+                accuracy = accuracy_score(y_val_fold, y_pred)
+                f1 = f1_score(y_val_fold, y_pred, average="weighted")
+                cv_accuracies.append(accuracy)
+                cv_f1_scores.append(f1)
+                logging.info(
+                    f"{model_type} Fold {fold + 1}: Accuracy = {accuracy:.4f}, F1 = {f1:.4f}"
+                )
+
+            avg_cv_accuracy = np.mean(cv_accuracies)
+            avg_cv_f1 = np.mean(cv_f1_scores)
+            logging.info(f"{model_type} Average CV Accuracy: {avg_cv_accuracy:.4f}")
+            logging.info(f"{model_type} Average CV F1 Score: {avg_cv_f1:.4f}")
+
+        x_train_final = x_train.drop(columns=["traj_id"])
+        x_test_final = x_test.drop(columns=["traj_id"])
+        self.scaler = StandardScaler()
+        x_train_scaled = self.scaler.fit_transform(x_train_final)
+        x_test_scaled = self.scaler.transform(x_test_final)
+
+        self.feature_names = x_train_final.columns.tolist()
+
+        x_train_scaled = pd.DataFrame(x_train_scaled, columns=self.feature_names)
+        x_test_scaled = pd.DataFrame(x_test_scaled, columns=self.feature_names)
+
+        if model_type == "lightgbm":
+            self.model = LGBMClassifier(
+                objective="multiclass", num_class=4, random_state=42
+            )
+        elif model_type == "xgboost":
+            self.model = XGBClassifier(
+                objective="multi:softprob", num_class=4, random_state=42
+            )
+
+        self.model.fit(x_train_scaled, y_train)
+        logging.info(f"Training final {model_type} model on entire training set...")
+        test_accuracy, test_f1 = self._evaluate(
+            self.model, x_test_scaled, y_test, model_type
         )
-        logging.info(f"Test set: {len(x_test)} samples, {len(traj_test)} trajectories")
 
-        # Handle NaN
-        x_train = self._fill_nan(x_train, "treino")
-        x_test = self._fill_nan(x_test, "teste")
-
-        class_counts_train = y_train.value_counts()
-        logging.info(f"Class counts in training set: {class_counts_train.to_dict()}")
-
-        # Encode edge_id
-        x_train.loc[:, "edge_id"] = self.edge_id_encoder.transform(
-            x_train["edge_id"]
-        ).astype(np.int64)
-        x_test.loc[:, "edge_id"] = self.edge_id_encoder.transform(
-            x_test["edge_id"]
-        ).astype(np.int64)
-
-        # Encode labels
-        self.label_encoder = LabelEncoder()
-        y_train_encoded = self.label_encoder.fit_transform(y_train)
-
-        # Normalize features
-        x_train, x_test = self._normalize_features(x_train, x_test)
-
-        # Train model
-        self.model = LGBMClassifier(
-            objective="multiclass",
-            num_class=4,
-            random_state=42,
-            n_estimators=50,
-            max_depth=3,
-            class_weight="balanced",
-        )
-        self.model.fit(x_train, y_train_encoded, categorical_feature=["edge_id"])
-
-        # Evaluate model
-        self._evaluate(x_test, y_test)
-
-        # Save model and parameters
         os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
         with open(self.model_path, "wb") as f:
             pickle.dump(self.model, f)
-        with open(self.scaler_params_path, "wb") as f:
-            pickle.dump(self.scaler_params, f)
-        with open(self.label_encoder_path, "wb") as f:
-            pickle.dump(self.label_encoder, f)
-        edge_id_encoder_path = os.path.join(
-            os.path.dirname(self.model_path), "edge_id_encoder.pkl"
-        )
-        with open(edge_id_encoder_path, "wb") as f:
-            pickle.dump(self.edge_id_encoder, f)
-        logging.info("Model and parameters saved successfully.")
+        with open(self.scaler_path, "wb") as f:
+            pickle.dump(self.scaler, f)
+        logging.info(f"{model_type} model and scaler saved successfully.")
 
-    def _create_windows(self, df, window_size="15min", prediction_horizon="5min"):
-        total_windows = 0
-        empty_future_count = 0
-        null_sri_count = 0
-        is_dask = isinstance(df, dd.DataFrame)
-
-        logging.info("Aggregating features...")
-        if is_dask:
-            df = df.assign(window_timestamp=df["timestamp"].dt.floor(window_size))
-            agg_features = (
-                df.groupby(["window_timestamp", "edge_id", "traj_id"])
-                .agg(
-                    {
-                        "speed": "mean",
-                        "free_flow_speed": "mean",
-                    }
-                )
-                .reset_index()
+        if cv_folds > 0:
+            logging.info(f"{model_type} Comparison of 70-30 split vs Cross-Validation:")
+            logging.info(
+                f"70-30 Test Accuracy: {test_accuracy:.4f}, {model_type} CV Avg Accuracy: {avg_cv_accuracy:.4f}"
             )
-            agg_features = agg_features.compute()
-        else:
-            df = df.assign(window_timestamp=df["timestamp"].dt.floor(window_size))
-            agg_features = (
-                df.groupby(["window_timestamp", "edge_id", "traj_id"])
-                .agg(
-                    {
-                        "speed": "mean",
-                        "free_flow_speed": "mean",
-                    }
-                )
-                .reset_index()
+            logging.info(
+                f"70-30 Test F1 Score: {test_f1:.4f}, {model_type} CV Avg F1 Score: {avg_cv_f1:.4f}"
             )
-
-        total_windows = len(agg_features)
-        agg_features.columns = [
-            "timestamp",
-            "edge_id",
-            "traj_id",
-            "speed_mean",
-            "free_flow_speed_mean",
-        ]
-
-        logging.info("Verificando NaN após agregação...")
-        nan_counts_agg = agg_features.isna().sum()
-        logging.info(f"NaN após agregação:\n{nan_counts_agg.to_string()}")
-
-        logging.info("Adding temporal features...")
-        agg_features["hour"] = agg_features["timestamp"].dt.hour.astype(np.int8)
-        agg_features["day_of_week"] = agg_features["timestamp"].dt.dayofweek.astype(
-            np.int8
-        )
-        agg_features["is_peak_hour"] = (
-            agg_features["timestamp"].dt.hour.isin([7, 8, 17, 18]).astype(np.int8)
-        )
-        agg_features["is_weekend"] = (
-            agg_features["timestamp"].dt.dayofweek.isin([5, 6]).astype(np.int8)
-        )
-        agg_features["speed_change"] = agg_features.groupby("edge_id")[
-            "speed_mean"
-        ].pct_change()
-        agg_features["speed_change"] = (
-            agg_features["speed_change"]
-            .replace([np.inf, -np.inf], np.nan)
-            .fillna(0)
-            .clip(lower=-1, upper=1)
-        )
-
-        logging.info("Verificando NaN após cálculo de speed_change...")
-        nan_counts_speed_change = agg_features["speed_change"].isna().sum()
-        logging.info(f"NaN em speed_change: {nan_counts_speed_change}")
-
-        logging.info("Calculating future SRI...")
-        future_sri = df[["timestamp", "edge_id", "traj_id", "sri"]].copy()
-        if is_dask:
-            future_sri = future_sri.assign(
-                window_end=future_sri["timestamp"].dt.floor(window_size)
-            )
-            future_sri_agg = (
-                future_sri.groupby(["edge_id", "traj_id", "window_end"])
-                .agg({"sri": "mean"})
-                .reset_index()
-            )
-            future_sri_agg = future_sri_agg.compute()
-        else:
-            future_sri = future_sri.assign(
-                window_end=future_sri["timestamp"].dt.floor(window_size)
-            )
-            future_sri_agg = (
-                future_sri.groupby(["edge_id", "traj_id", "window_end"])
-                .agg({"sri": "mean"})
-                .reset_index()
-            )
-
-        logging.info("Distribuição do SRI:")
-        logging.info(future_sri_agg["sri"].describe())
-        logging.info(f"Valores de SRI negativos: {(future_sri_agg['sri'] < 0).sum()}")
-        logging.info(f"Valores de SRI nulos: {future_sri_agg['sri'].isna().sum()}")
-
-        agg_features["future_time"] = agg_features["timestamp"] + pd.Timedelta(
-            prediction_horizon
-        )
-        agg_features["future_time_floored"] = agg_features["future_time"].dt.floor(
-            window_size
-        )
-        agg_features = agg_features.merge(
-            future_sri_agg,
-            left_on=["edge_id", "traj_id", "future_time_floored"],
-            right_on=["edge_id", "traj_id", "window_end"],
-            how="left",
-        )
-
-        logging.info("Assigning labels...")
-
-        def assign_sri_label(sri):
-            if pd.isna(sri):
-                logging.info("SRI nulo encontrado, atribuindo 'none'")
-                return "none"
-            if sri < 0.15:
-                return "none"
-            elif sri < 0.4:
-                return "light"
-            elif sri < 0.7:
-                return "moderate"
-            else:
-                return "severe"
-
-        agg_features["label"] = agg_features["sri"].apply(assign_sri_label)
-        empty_future_count = agg_features["sri"].isna().sum()
-        null_sri_count = agg_features["sri"].isna().sum() - empty_future_count
-        agg_features = agg_features.drop(
-            columns=["sri", "window_end", "future_time", "future_time_floored"]
-        ).dropna(subset=["label"])
-
-        logging.info(f"Created {len(agg_features)} windows with features and labels.")
-        logging.info(f"Total initial windows: {total_windows}")
-        logging.info(
-            f"Windows discarded due to empty future data: {empty_future_count} ({empty_future_count/total_windows*100:.2f}%)"
-        )
-        logging.info(
-            f"Windows discarded due to null SRI: {null_sri_count} ({null_sri_count/total_windows*100:.2f}%)"
-        )
-        return agg_features
-
-    def prepare_data(self, df):
-        if self.scaler_params is None or self.edge_id_encoder is None:
-            raise ValueError(
-                "Normalization parameters or edge_id encoder not initialized."
-            )
-        if isinstance(df, pd.DataFrame) and all(
-            col in df.columns
-            for col in [
-                "speed_mean",
-                "free_flow_speed_mean",
-                "speed_change",
-                "hour",
-                "day_of_week",
-                "is_peak_hour",
-                "is_weekend",
-                "edge_id",
-            ]
-        ):
-            x = df.copy()
-        else:
-            required_columns = [
-                "timestamp",
-                "traj_id",
-                "edge_id",
-                "speed",
-                "free_flow_speed",
-                "speed_segment",
-            ]
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            if missing_columns:
-                raise ValueError(f"Missing columns: {missing_columns}")
-            df = df.copy()
-            x = self._create_windows(df)
-
-        x["edge_id"] = self.edge_id_encoder.transform(x["edge_id"]).astype(np.int64)
-        for col in self.scaler_params:
-            mean = self.scaler_params[col]["mean"]
-            std = self.scaler_params[col]["std"]
-            x[col] = (x[col] - mean) / std if std > 0 else x[col]
-        return x
 
     def predict(self, df):
-        if self.model is None or self.label_encoder is None:
-            raise ValueError("Model or label encoder not initialized.")
-        x_scaled = self.prepare_data(df)
-        probabilities = self.model.predict_proba(x_scaled)
-        decoded_classes = self.label_encoder.inverse_transform(range(len(self.CLASSES)))
-        return [
-            {cls: float(prob) for cls, prob in zip(decoded_classes, probs)}
-            for probs in probabilities
-        ]
+        """Make predictions on new data."""
+        if not self.model or not self.scaler:
+            raise ValueError("Model or scaler not initialized. Train the model first.")
+        x, _ = self._prepare_data(df)
+        x = x.drop(columns=["traj_id"])
+        x_scaled = self.scaler.transform(x)
+        x_scaled = pd.DataFrame(x_scaled, columns=self.feature_names)
+        return self.model.predict_proba(x_scaled)
 
 
 def main():
+    """Main function to train models with cross-validation."""
     model = CongestionModel()
-    if model.model is None:
-        logging.info("Model not loaded. Training a new model...")
-        model.train_model()
-    logging.info("Model training completed with evaluation on test set.")
+    if not model.model:
+        logging.info("Starting training for LightGBM model with 5-fold CV...")
+        model.train_model(model_type="lightgbm", cv_folds=5)
+        logging.info("Starting training for XGBoost model with 5-fold CV...")
+        model.train_model(model_type="xgboost", cv_folds=5)
 
 
 if __name__ == "__main__":

@@ -50,4 +50,9 @@ MAX_HDOP = 10.0
 MAX_SPEED = 120.0
 
 # Filters Features
-OFF_PEAK_HOURS = [1, 2, 3, 4, 5, 9, 10, 11, 15, 16, 21, 22, 23, 24]
+PEAK_HOURS = [7, 8, 12, 13, 14, 17, 18, 19]  # 7–9 AM, 12–3 PM, 5–8 PM
+OFF_PEAK_HOURS = [0, 1, 2, 3, 4, 5, 6, 9, 10, 11, 15, 16, 20, 21, 22, 23]  # Adjusted
+
+DASK_MEMORY_LIMIT = "3GB"
+DASK_NUM_THREADS = 2
+DASK_NUM_CORES = 2
