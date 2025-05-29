@@ -11,7 +11,6 @@ from app.fcd.config.variables import (
 )
 from app.fcd.model import CongestionModel
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -164,7 +163,7 @@ def evaluate_congestion(
     logging.info(f"Predictions saved to {SUMO_ACCIDENTS_PREDICTION_FILE}")
 
 
-def main():
+def test_model():
     model = CongestionModel(model_type="lightgbm")
     evaluate_congestion(
         model, SUMO_MATCHED_FILE, SUMO_ACCIDENTS_FILE, FEATURES_DATA_FILE
@@ -172,4 +171,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    test_model()

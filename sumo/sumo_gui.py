@@ -18,7 +18,6 @@ from app.fcd.config.variables import (
 
 SUMO_GUI_BINARY = os.path.join(SUMO_HOME, "bin", "sumo-gui")
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -43,11 +42,9 @@ def update_sumo_config():
 
 
 def visualize_accidents():
-    # Load accidents and predictions
     accidents_df = pd.read_parquet(SUMO_ACCIDENTS_FILE)
     predictions_df = pd.read_csv(SUMO_ACCIDENTS_PREDICTION_FILE)
 
-    # Filter accidents with predicted_congestion different from "unknown"
     filtered_predictions = predictions_df[
         predictions_df["predicted_congestion"] != "unknown"
     ]
@@ -58,7 +55,6 @@ def visualize_accidents():
         )
         return
 
-    # Iterate over filtered accidents
     for _, prediction in filtered_predictions.iterrows():
         idx = prediction["accident_index"]
         if idx >= len(accidents_df):

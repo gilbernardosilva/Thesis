@@ -28,7 +28,7 @@ class CongestionModel:
         scaler_path=SCALER_PARAMS_PATH,
     ):
         self.model_type = model_type
-        self.model_path = f"{model_path}_{model_type}.pkl"  # Diferente para cada modelo
+        self.model_path = f"{model_path}_{model_type}.pkl"
         self.scaler_path = f"{scaler_path}_{model_type}.pkl"
         self.model = None
         self.scaler = None

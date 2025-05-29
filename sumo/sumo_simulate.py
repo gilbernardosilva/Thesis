@@ -57,7 +57,7 @@ def map_to_valhalla_edge(latitude: float, longitude: float) -> int:
             and len(result[0]["edges"]) > 0
         ):
             edge = result[0]["edges"][0]
-            way_id = edge.get("way_id", -1)  # edge.id do Valhalla
+            way_id = edge.get("way_id", -1)
             logging.debug(f"Mapped ({latitude}, {longitude}) to edge_id: {way_id}")
             return int(way_id)
         else:
@@ -178,7 +178,7 @@ def run_simulation(sim_start):
                                 "latitude": lat,
                                 "longitude": lon,
                                 "edge_id": edge_id,
-                                "sumo_edge_id": sumo_edge_id,  # Adiciona o edge ID do SUMO
+                                "sumo_edge_id": sumo_edge_id,
                             }
                         )
                     except traci.exceptions.TraCIException:

@@ -1,6 +1,6 @@
 import logging
 
-from app.fcd.config.utils import export_n_first_rows_to_csv, print_n_first_rows
+from app.fcd.config.utils import export_n_first_rows_to_csv, 
 from app.fcd.config.variables import (
     SUMO_ACCIDENTS_FILE,
     SUMO_END_TIME,
@@ -10,6 +10,7 @@ from app.fcd.config.variables import (
 from sumo.sumo_map_matching import map_match_fcd
 from sumo.sumo_parser import process_fcd
 from sumo.sumo_simulate import calculate_sim_start, simulate_parse_accidents
+from sumo.sumo_model import test_model
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +54,10 @@ def main():
             SUMO_MATCHED_FILE, "sumo/output/sumo_matched.csv", 1000
         )
 
+        logging.info("Testing model with matched FCD data...")
+        test_model()
+
+        
         logging.info("SUMO pipeline completed successfully.")
 
     except Exception as e:
