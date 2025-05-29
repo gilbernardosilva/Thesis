@@ -16,7 +16,7 @@ INPUT_CSV_SCHEMA = pa.schema(
 # Schema for cleaned data Parquet file
 CLEAN_DATA_SCHEMA = pa.schema(
     [
-        ("id", pa.string()),
+        ("traj_id", pa.string()),
         ("timestamp", pa.timestamp("ns")),
         ("latitude", pa.float32()),
         ("longitude", pa.float32()),
@@ -28,7 +28,7 @@ CLEAN_DATA_SCHEMA = pa.schema(
 # Schema for filtered data (assumed)
 FILTERED_DATA_SCHEMA = pa.schema(
     [
-        ("id", pa.string()),
+        ("traj_id", pa.string()),
         ("timestamp", pa.timestamp("ns")),
         ("latitude", pa.float64()),
         ("longitude", pa.float64()),
@@ -93,3 +93,16 @@ ROAD_CLASS_ARRAY = [
     "unclassified",
     "service_other",
 ]
+
+SUMO_ACCIDENTS_SCHEMA = pa.schema(
+    [
+        ("vehicle_id", pa.string()),
+        ("start_time", pa.timestamp("ns")),
+        ("end_time", pa.timestamp("ns")),
+        ("duration", pa.int32()),
+        ("latitude", pa.float64()),
+        ("longitude", pa.float64()),
+        ("edge_id", pa.int64()),
+        ("sumo_edge_id", pa.string()),
+    ]
+)

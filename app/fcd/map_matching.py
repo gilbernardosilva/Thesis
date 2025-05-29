@@ -161,7 +161,7 @@ async def process_partition_async(pdf: pd.DataFrame) -> pd.DataFrame:
     sem = asyncio.Semaphore(CONCURRENCY_LIMIT)
     async with aiohttp.ClientSession() as session:
         tasks = []
-        for traj_id, group in pdf.groupby("id"):
+        for traj_id, group in pdf.groupby("traj_id"):
             group = group.sort_values("timestamp")
             times = group["timestamp"].tolist()
             speeds = group["speed"].tolist()
@@ -198,6 +198,7 @@ async def process_partition_async(pdf: pd.DataFrame) -> pd.DataFrame:
                     result = await send_valhalla_request_async(payload, session)
                     if result:
                         return extract_segment_features(result, traj_id, times, speeds)
+
                     else:
                         logging.warning(f"Map matching failed for traj_id {traj_id}")
                         empty_data = {
@@ -299,7 +300,7 @@ def map_matching():
                 compression="snappy",
                 schema=MAPPED_DATA_SCHEMA,
             )
-        total = ddf["id"].nunique().compute()
+        total = ddf["traj_id"].nunique().compute()
         success = matched["traj_id"].nunique().compute()
         logging.info(
             f"Total trajectories: {total}, Successfully matched: {success}, Failed: {total - success}"

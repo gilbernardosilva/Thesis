@@ -39,11 +39,11 @@ LABEL_ENCODER_PATH = os.path.join(
     PROJECT_BASE_PATH, "output", "models", "label_encoder.pkl"
 )
 
-# Region configuration
+# Region to be filtered configuration
 REGION_TYPE = "city"
 REGION_NAME = "Gaia"
 
-# Filters Parser
+# Filters for the data processing script
 TS_START = "2020-08-01"
 TS_END = "2020-11-30"
 MAX_HDOP = 10.0
@@ -51,8 +51,47 @@ MAX_SPEED = 120.0
 
 # Filters Features
 PEAK_HOURS = [7, 8, 12, 13, 14, 17, 18, 19]  # 7–9 AM, 12–3 PM, 5–8 PM
-OFF_PEAK_HOURS = [0, 1, 2, 3, 4, 5, 6, 9, 10, 11, 15, 16, 20, 21, 22, 23]  # Adjusted
+OFF_PEAK_HOURS = [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    9,
+    10,
+    11,
+    15,
+    16,
+    20,
+    21,
+    22,
+    23,
+]  # 0–6 AM, 9–11 AM, 3–4 PM, 8–11 PM
 
 DASK_MEMORY_LIMIT = "3GB"
 DASK_NUM_THREADS = 2
 DASK_NUM_CORES = 2
+
+# SUMO configuration
+SUMO_HOME = os.getenv("SUMO_HOME")
+SUMO_PROJECT_PATH = os.path.join(PROJECT_BASE_PATH, "sumo")
+SUMO_CONFIG_FILE = os.path.join(SUMO_PROJECT_PATH, "input", "gaia.sumocfg")
+SUMO_NET_FILE = os.path.join(SUMO_PROJECT_PATH, "input", "gaia.net.xml.gz")
+SUMO_TRIPS_FILE = os.path.join(SUMO_PROJECT_PATH, "output", "gaia_new_trips.xml")
+SUMO_FCD_FILE = os.path.join(SUMO_PROJECT_PATH, "output", "gaia_fcd.xml")
+SUMO_ACCIDENTS_FILE = os.path.join(SUMO_PROJECT_PATH, "output", "accidents.parquet")
+SUMO_ROUTES_FILE = os.path.join(SUMO_PROJECT_PATH, "output", "gaia_routes.rou.xml")
+SUMO_FCD_PARSED_FILE = os.path.join(SUMO_PROJECT_PATH, "output", "parsed_fcd.parquet")
+SUMO_MATCHED_FILE = os.path.join(SUMO_PROJECT_PATH, "output", "matched_fcd.parquet")
+
+SUMO_END_TIME = 3600  # Seconds (60  *  60)
+SUMO_ACCIDENT_PROB = 0.01
+SUMO_MIN_ACCIDENT_DURATION = 300  # Seconds
+SUMO_MAX_ACCIDENT_DURATION = 6000  # Seconds
+SUMO_STARTING_HOUR = 7
+
+SUMO_ACCIDENTS_PREDICTION_FILE = os.path.join(
+    SUMO_PROJECT_PATH, "output", "accidents_prediction.csv"
+)

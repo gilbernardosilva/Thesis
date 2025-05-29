@@ -23,20 +23,20 @@ def main():
 
     try:
 
-        load_and_clean_data()
-        print_n_first_rows(CLEAN_DATA_FILE)
+        # load_and_clean_data()
+        # print_n_first_rows(CLEAN_DATA_FILE)
 
-        load_filter_region()
-        print_n_first_rows(FILTERED_DATA_FILE)
+        # load_filter_region()
+        # print_n_first_rows(FILTERED_DATA_FILE)
 
-        map_matching()
-        print_n_first_rows(MAPPED_DATA_FILE)
+        # map_matching()
+        # print_n_first_rows(MAPPED_DATA_FILE)
 
-        feature_engineering()
-        print_n_first_rows(FEATURES_DATA_FILE)
-        export_n_first_rows_to_csv(
-            FEATURES_DATA_FILE, "output/data/features_data.csv", 1000
-        )
+        # feature_engineering()
+        # print_n_first_rows(FEATURES_DATA_FILE)
+        # export_n_first_rows_to_csv(
+        #     FEATURES_DATA_FILE, "output/data/features_data.csv", 1000
+        # )
 
         model_main()
     except Exception as e:

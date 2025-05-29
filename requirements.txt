@@ -1,6 +1,11 @@
 aiohttp==3.11.18
-distributed==2025.4.1
+distributed==2025.5.1
+imbalanced-learn==0.13.0
+lightgbm==4.6.0
+lxml==5.4.0
+matplotlib==3.10.3
 osmnx==2.0.3
 pip-chill==1.0.3
 pyarrow==20.0.0
 python-dotenv==1.1.0
+traci==1.23.1

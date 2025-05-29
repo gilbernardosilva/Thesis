@@ -14,6 +14,9 @@ from app.fcd.config.schemas import CLEAN_DATA_SCHEMA, FILTERED_DATA_SCHEMA
 from app.fcd.config.utils import ensure_directory_exists
 from app.fcd.config.variables import (
     CLEAN_DATA_FILE,
+    DASK_MEMORY_LIMIT,
+    DASK_NUM_CORES,
+    DASK_NUM_THREADS,
     EDGES_DATA_FILE,
     FILTERED_DATA_FILE,
     REGION_NAME,
@@ -109,9 +112,9 @@ def load_filter_region() -> None:
     start = time.time()
 
     cluster = LocalCluster(
-        n_workers=2,
-        threads_per_worker=2,
-        memory_limit="2.5GB",
+        n_workers=DASK_NUM_CORES,
+        threads_per_worker=DASK_NUM_THREADS,
+        memory_limit=DASK_MEMORY_LIMIT,
     )
     client = Client(cluster)
 

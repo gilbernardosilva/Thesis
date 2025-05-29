@@ -21,29 +21,34 @@ from app.fcd.config.variables import FEATURES_DATA_FILE, MODEL_PATH, SCALER_PARA
 class CongestionModel:
     CLASSES = ["none", "light", "moderate", "severe"]
 
-    def __init__(self, model_path=MODEL_PATH, scaler_path=SCALER_PARAMS_PATH):
-        """Initialize the model with paths for saving/loading."""
-        self.model_path = model_path
-        self.scaler_path = scaler_path
+    def __init__(
+        self,
+        model_type="lightgbm",
+        model_path=MODEL_PATH,
+        scaler_path=SCALER_PARAMS_PATH,
+    ):
+        self.model_type = model_type
+        self.model_path = f"{model_path}_{model_type}.pkl"  # Diferente para cada modelo
+        self.scaler_path = f"{scaler_path}_{model_type}.pkl"
         self.model = None
         self.scaler = None
         self.feature_names = None
         self._load_model_files()
 
     def _load_model_files(self):
-        """Load saved model and scaler if they exist."""
         if os.path.exists(self.model_path) and os.path.exists(self.scaler_path):
             with open(self.model_path, "rb") as f:
                 self.model = pickle.load(f)
             with open(self.scaler_path, "rb") as f:
                 self.scaler = pickle.load(f)
-            logging.info("Model and scaler loaded successfully.")
+            logging.info(f"{self.model_type} model and scaler loaded successfully.")
         else:
-            logging.info("No existing model found. Please train a new model.")
+            logging.info(
+                f"No existing {self.model_type} model found. Please train a new model."
+            )
 
     def _create_label(self, sri: float) -> int:
-        """Create a multiclass label (0-3) from SRI."""
-        sri = max(0.0, min(1.0, sri))  # Clip SRI to [0, 1]
+        sri = max(0.0, min(1.0, sri))
         if sri < 0.15:
             return 0  # None
         elif sri < 0.35:
@@ -54,7 +59,6 @@ class CongestionModel:
             return 3  # Severe
 
     def _prepare_data(self, df):
-        """Prepare features and labels from the dataframe for model training/prediction."""
         features = [
             "day_of_week",
             "hour",
@@ -69,14 +73,12 @@ class CongestionModel:
             "speed_bin_2",
             "speed_bin_3",
             "speed_bin_4",
-            "total_stopped_time_per_edge_per_traj",  # New metric replacing avg_stopped_time_seconds
+            "total_stopped_time_per_edge_per_traj",
         ]
         x = df[features + ["traj_id"]].copy()
-        y = df["sri"].apply(self._create_label)
-        return x, y
+        return x
 
     def _evaluate(self, model, x_test, y_test, model_type):
-        """Evaluate the model and log performance metrics with model name."""
         x_test_df = pd.DataFrame(x_test, columns=self.feature_names)
         y_pred = model.predict(x_test_df)
         accuracy = accuracy_score(y_test, y_pred)
@@ -90,12 +92,10 @@ class CongestionModel:
         logging.info(f"Classification Report:\n{report}")
         return accuracy, f1
 
-    def train_model(
-        self, data_path=FEATURES_DATA_FILE, model_type="lightgbm", cv_folds=0
-    ):
-        """Train the model with optional cross-validation and evaluate."""
+    def train_model(self, data_path=FEATURES_DATA_FILE, cv_folds=0):
         df = pd.read_parquet(data_path)
-        x, y = self._prepare_data(df)
+        x = self._prepare_data(df)
+        y = df["sri"].apply(self._create_label)
 
         traj_ids = df["traj_id"].unique()
         traj_train, traj_test = train_test_split(
@@ -108,7 +108,7 @@ class CongestionModel:
 
         if cv_folds > 0:
             logging.info(
-                f"Performing {cv_folds}-fold cross-validation for {model_type}..."
+                f"Performing {cv_folds}-fold cross-validation for {self.model_type}..."
             )
             gkf = GroupKFold(n_splits=cv_folds)
             groups = x_train["traj_id"]
@@ -133,11 +133,11 @@ class CongestionModel:
                     x_val_fold_scaled, columns=x_val_fold.columns
                 )
 
-                if model_type == "lightgbm":
+                if self.model_type == "lightgbm":
                     model = LGBMClassifier(
                         objective="multiclass", num_class=4, random_state=42
                     )
-                elif model_type == "xgboost":
+                elif self.model_type == "xgboost":
                     model = XGBClassifier(
                         objective="multi:softprob", num_class=4, random_state=42
                     )
@@ -153,13 +153,15 @@ class CongestionModel:
                 cv_accuracies.append(accuracy)
                 cv_f1_scores.append(f1)
                 logging.info(
-                    f"{model_type} Fold {fold + 1}: Accuracy = {accuracy:.4f}, F1 = {f1:.4f}"
+                    f"{self.model_type} Fold {fold + 1}: Accuracy = {accuracy:.4f}, F1 = {f1:.4f}"
                 )
 
             avg_cv_accuracy = np.mean(cv_accuracies)
             avg_cv_f1 = np.mean(cv_f1_scores)
-            logging.info(f"{model_type} Average CV Accuracy: {avg_cv_accuracy:.4f}")
-            logging.info(f"{model_type} Average CV F1 Score: {avg_cv_f1:.4f}")
+            logging.info(
+                f"{self.model_type} Average CV Accuracy: {avg_cv_accuracy:.4f}"
+            )
+            logging.info(f"{self.model_type} Average CV F1 Score: {avg_cv_f1:.4f}")
 
         x_train_final = x_train.drop(columns=["traj_id"])
         x_test_final = x_test.drop(columns=["traj_id"])
@@ -172,19 +174,21 @@ class CongestionModel:
         x_train_scaled = pd.DataFrame(x_train_scaled, columns=self.feature_names)
         x_test_scaled = pd.DataFrame(x_test_scaled, columns=self.feature_names)
 
-        if model_type == "lightgbm":
+        if self.model_type == "lightgbm":
             self.model = LGBMClassifier(
                 objective="multiclass", num_class=4, random_state=42
             )
-        elif model_type == "xgboost":
+        elif self.model_type == "xgboost":
             self.model = XGBClassifier(
                 objective="multi:softprob", num_class=4, random_state=42
             )
 
         self.model.fit(x_train_scaled, y_train)
-        logging.info(f"Training final {model_type} model on entire training set...")
+        logging.info(
+            f"Training final {self.model_type} model on entire training set..."
+        )
         test_accuracy, test_f1 = self._evaluate(
-            self.model, x_test_scaled, y_test, model_type
+            self.model, x_test_scaled, y_test, self.model_type
         )
 
         os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
@@ -192,22 +196,23 @@ class CongestionModel:
             pickle.dump(self.model, f)
         with open(self.scaler_path, "wb") as f:
             pickle.dump(self.scaler, f)
-        logging.info(f"{model_type} model and scaler saved successfully.")
+        logging.info(f"{self.model_type} model and scaler saved successfully.")
 
         if cv_folds > 0:
-            logging.info(f"{model_type} Comparison of 70-30 split vs Cross-Validation:")
             logging.info(
-                f"70-30 Test Accuracy: {test_accuracy:.4f}, {model_type} CV Avg Accuracy: {avg_cv_accuracy:.4f}"
+                f"{self.model_type} Comparison of 70-30 split vs Cross-Validation:"
             )
             logging.info(
-                f"70-30 Test F1 Score: {test_f1:.4f}, {model_type} CV Avg F1 Score: {avg_cv_f1:.4f}"
+                f"70-30 Test Accuracy: {test_accuracy:.4f}, {self.model_type} CV Avg Accuracy: {avg_cv_accuracy:.4f}"
+            )
+            logging.info(
+                f"70-30 Test F1 Score: {test_f1:.4f}, {self.model_type} CV Avg F1 Score: {avg_cv_f1:.4f}"
             )
 
     def predict(self, df):
-        """Make predictions on new data."""
         if not self.model or not self.scaler:
             raise ValueError("Model or scaler not initialized. Train the model first.")
-        x, _ = self._prepare_data(df)
+        x = self._prepare_data(df)
         x = x.drop(columns=["traj_id"])
         x_scaled = self.scaler.transform(x)
         x_scaled = pd.DataFrame(x_scaled, columns=self.feature_names)
@@ -215,13 +220,15 @@ class CongestionModel:
 
 
 def main():
-    """Main function to train models with cross-validation."""
-    model = CongestionModel()
+    model = CongestionModel(model_type="lightgbm")
     if not model.model:
         logging.info("Starting training for LightGBM model with 5-fold CV...")
-        model.train_model(model_type="lightgbm", cv_folds=5)
+        model.train_model(cv_folds=5)
+
+    model = CongestionModel(model_type="xgboost")
+    if not model.model:
         logging.info("Starting training for XGBoost model with 5-fold CV...")
-        model.train_model(model_type="xgboost", cv_folds=5)
+        model.train_model(cv_folds=5)
 
 
 if __name__ == "__main__":
