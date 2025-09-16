@@ -1,3 +1,8 @@
+# DTIP: A Scalable Pipeline for Traffic Congestion Detection Using Floating Car Data
+
+Project developed for my Thesis submitted to the Master of Science degree on Universidade Fernando Pessoa
+
+
 ## Prerequisites for Valhalla and SUMO Setup
 
 - Docker
